@@ -18,6 +18,7 @@ import json
 import contextlib
 import threading
 import time
+import _md5
 
 from collections import defaultdict
 
@@ -423,7 +424,7 @@ class KafkaProducer(object):
 
     def _delivery_cb(self, err, msg):
         """
-        发送回调函数，同步发送失败的时候，回调函数结果不准，只在异步的时候处理
+        发送回调函数, FIXME 异步发送有事在下一个发送成功时，才会返回上一个回调，需要追踪
         :param err:
         :param msg:
         :return:
@@ -490,9 +491,13 @@ class KafkaProducer(object):
 class PIOKafkaClient(object):
 
     def __init__(self, hosts, ssl_path=None, passwd=None,
-                 logger=None, new_version=True, debug=False, version=None):
+                 logger=None, debug=False, version=None):
 
-        self._logger = logger if logger else logging.getLogger('kafka_client')
+        if logger:
+            self._logger = logger
+        else:
+            import logging
+            logging.getLogger('kafka_client')
 
         self._debug = debug
         self._producer = dict()
@@ -501,10 +506,6 @@ class PIOKafkaClient(object):
         self._c_lock = threading.Lock()
         self._s_callback = None
         self._f_callback = None
-
-        self._version = '0.10.2.1' if new_version else '0.9.0'
-        if version:
-            self._version = version
 
         # 通用配置
         self._common_cfg = {
@@ -515,10 +516,10 @@ class PIOKafkaClient(object):
             'ssl.ca.location': os.path.join(ssl_path, 'ca-cert') if ssl_path else None,
             'ssl.certificate.location': os.path.join(ssl_path, 'client.crt') if ssl_path else None,
             'ssl.key.password': passwd,
-            'api.version.request': True if version_compare(self._version,'0.9.0.1') else False,
-            'broker.version.fallback': self._version,
+            'api.version.request': True if version_compare(version,'0.9.0.1') else False,
+            'broker.version.fallback': version,
             'log.connection.close': False,
-            'heartbeat.interval.ms': 60000,
+            'heartbeat.interval.ms': 10000,
             'log_level': 6,
             'message.max.bytes': 314572800,
             'stats_cb': self._status_cb,  # 获取此时的连接信息，相当与心跳包
@@ -606,9 +607,17 @@ class PIOKafkaClient(object):
                         auto_commit True/False 是否自动提交
         :return:
         """
-        _topics = [topics] if isinstance(topics, str) else topics
-        _id = threading.currentThread().name + group + '-' + ':'.join(sorted(topics))
+        if isinstance(topics, str):
+            _topics = [topics]
+        elif isinstance(topics, list) or isinstance(topics, tuple):
+            _topics = topics
+        else:
+            raise ValueError("topics must be str or list/tuple, but {}".format(type(topics).__name__))
 
+        _id = ''.join((threading.currentThread().name,
+                       group,
+                       ':'.join(sorted(topics)),)
+                      )
         self._logger.debug('_id >> {}'.format(_id))
         if _id not in self._consumer:
             # 驱动配置
@@ -690,93 +699,3 @@ class PIOKafkaClient(object):
         """
         with self.get_consumer(topic, group, auto_commit=False, normal=False) as c:
             return c.current_offset()
-
-if __name__ == '__main__':
-
-    import threading
-    import logging
-    import time
-    import sys
-    pp = os.path.dirname(
-        os.path.dirname(
-            os.path.realpath(__file__)
-        )
-    )
-    sys.path.append(pp)
-
-    print(version_compare('0.10.2.1', '0.9.0.0'))
-
-    client = PIOKafkaClient(
-                            # hosts='114.118.8.197:9092',
-                            # hosts='114.118.8.199:9093',
-                            ssl_path=os.path.join(pp, 'static/kafka_test_cert'),
-                            hosts='114.118.8.202:8092,114.118.8.202:8093,114.118.8.202:8094',
-                            # ssl_path=os.path.join(pp, 'static/kafka_test_cert_82'),
-                            # ssl_path=os.path.join(pp, 'static/kafka_cert'),
-                            logger=logging,# .LogHandler('test', path='.', log_level='INFO'),
-                            new_version=True,
-                            debug=False)
-    # 重置offset
-    # res = client.reset_offset('group.test', [('TOPIC_ANALYSIS_OFFLINE_JOB_RESULT_PIPE', 0, 'min')])
-    # print(res)
-    # dt = {"id": "5b42f70d58adb499051279a9","task_id": "5b42f70d58adb499051279a9","task_type": 31400,"timestamp": "2018-07-09T05:48:05.631000Z","platform": "","task": {"priority": 20,"account": None,"task_type": 0,"task_id": "5b42f70d58adb499051279a9","ts": 1531115002,"topic": "TOPIC_ANALYSIS_OFFLINE_JOB_RESULT_PIPE","task_info": {"type": "031400","params": {"member_urn": "urn:li:member:356578","url": "https://www.linkedin.com/in/richardhsu901/?lipi=urn%3Ali%3Apage%3Ad_flagship3_profile_view_base%3B9ujS1V77ToyC6fOSmz0aHg%3D%3D&licu=urn%3Ali%3Acontrol%3Ad_flagship3_profile_view_base-browsemap_profile","job_id": "0c14efa8352d4c0ba5a2437f7d189c87"}}},"result": {"result_info_flags": {"base_profile": 1},"post_count": 1,"return_flag": 1,"ts": 1531115282,"error_tip": "","result_json": {"base_profile": {"interests": None,"picture": "https://media.licdn.com/dms/image/C4E03AQFqvR8zY_AwYw/profile-displayphoto-shrink_800_800/0?e=1536796800&v=beta&t=3iEWiud0QHJTw3NO0O0TzW09CD455biXgM00A2tKdoA","stateName": "上海","followersCount": None,"countryCode": "cn","entityUrn": "ACoAAAAFcOIBG5cfOeiMW6u1lfyLhcUKa07kL4g","maidenName": None,"contactInstructions": None,"connectionsCount": 4346,"industryName": "社会组织","occupation": "ecosystems, lifelong learning, creative industries, branding...","phoneticLastName": None,"language": "en","firstName": "Richard","headline": "ecosystems, lifelong learning, creative industries, branding...","lastName": "Hsu 徐宗漢","urn": "urn:li:member:356578","linkedin_url": "https://www.linkedin.com/in/richardhsu901","phoneticFirstName": None,"summary": None,"locationName": "上海 长宁区","birthDay": "*-07-16","stateCode": "30","country": "US","postalCode": "200050"}}},"owner_id": "c71f97ea0435ad4d6a0b168f0062404827560e5aa00a043bf427ff339fd17de74474e6df26bdba6ea0cc54b4d6228cc174d600e966de35224eba41d10d3f09ab","describe": "4.X","version": "V4"}
-    # from crypto import get_cipher_text
-    # iv = {
-    #     'key': '0AJF39I9FPSBYS0Z',
-    #     'iv':  'NLMJO3BHW4599SUR'
-    # }
-    # 发送数据
-    # with client.get_producer(sync=True) as p:
-    #     if p.send('TOPIC_ANALYSIS_OFFLINE_JOB_RESULT_PIPE', get_cipher_text(dt, iv)):
-    #         print('success')
-    #     else:
-    #         print("failed")
-
-    # 接收数据
-    # from ..crypto import get_plain_text
-    # topic= 'c71f97ea0435ad4d6a0b168f0062404827560e5aa00a043bf427ff339fd17de74474e6df26bdba6ea0cc54b4d6228cc174d600e966de35224eba41d10d3f09ab_job_detail'
-    # iv = {
-    #     'key': u'B55E6402CF2EB262',
-    #     'iv': u'249D66B464B4D940',
-    # }
-    # with client.get_consumer(['c71f97ea0435ad4d6a0b168f0062404827560e5aa00a043bf427ff339fd17de74474e6df26bdba6ea0cc54b4d6228cc174d600e966de35224eba41d10d3f09ab'],
-    #                          'sucl_test_group',
-    #                          auto_commit=True,
-    #                          normal=True,
-    #                          ) as cc:
-    #     while True:
-    #         msg = cc.get()
-    #         if msg:
-    #             print(msg.offset)
-    #                 # print(msg.topic, msg.partition, msg.offset, msg.timestamp)
-    #         else:
-    #             print(None)
-    #
-    #         time.sleep(1)
-
-    # 多线程消费数据
-    # def get_data(client):
-    # msg = client.get(['11e644a8619d3e586a4109ec445f1063f10f3224fa2761ffe6b185930d3e533198b5bc6b3e4959e744e17a03698bbad6195a57079314dbe564e0740488a6c30e'],
-    #                  'DATA_CENTER_COLLECTION_SYSTEM',
-    #                  block=False)
-    # with client.get_consumer(['11e644a8619d3e586a4109ec445f1063f10f3224fa2761ffe6b185930d3e533198b5bc6b3e4959e744e17a03698bbad6195a57079314dbe564e0740488a6c30e'],
-    #                          'DATA_CENTER_COLLECTION_SYSTEM',
-    #                          auto_commit=True
-    #                          ) as cc:
-    # while True:
-    #     msg = client.get(['11e644a8619d3e586a4109ec445f1063f10f3224fa2761ffe6b185930d3e533198b5bc6b3e4959e744e17a03698bbad6195a57079314dbe564e0740488a6c30e'],
-    #                      'DATA_CENTER_COLLECTION_SYSTEM',
-    #                      block=False)
-    #     # msg = cc.get()
-    #
-    #     if msg:
-    #         print(threading.currentThread().name, msg.offset)
-    #
-    # client.get()
-
-    #
-    # threads = [threading.Thread(target=get_data, args=(client,))]
-    # for i in threads:
-    #     i.start()
-    # for i in threads:
-    #     i.join()
